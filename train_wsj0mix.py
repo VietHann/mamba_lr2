@@ -335,6 +335,18 @@ class Separation(sb.Brain):
 
         cur_epoch = self.hparams.epoch_counter.current
         n_step_per_epoch = 20000 // self.hparams.batch_size
+        if getattr(self.hparams, "dataset", None) == "lrs2":
+            world_size = (
+                torch.distributed.get_world_size()
+                if torch.distributed.is_initialized() else 1
+            )
+            # DistributedSampler pads to an equal number of samples per rank.
+            n_samples = (self.hparams.n_train_examples + world_size - 1) // world_size
+            batch_size = self.hparams.batch_size
+            if self.hparams.dataloader_opts.get("drop_last", False):
+                n_step_per_epoch = n_samples // batch_size
+            else:
+                n_step_per_epoch = (n_samples + batch_size - 1) // batch_size
         cur_step = cur_epoch * n_step_per_epoch
         self.global_fit_step = cur_step
         print(f'Start training at {str(cur_step)} steps.')
@@ -736,18 +748,34 @@ if __name__ == "__main__":
         )
 
     # Data preparation
-    from utils.prepare_data import prepare_wsjmix  # noqa
+    if hparams.get("dataset", "wsjmix") == "lrs2":
+        from utils.prepare_data_lrs2 import prepare_lrs2
 
-    run_on_main(
-        prepare_wsjmix,
-        kwargs={
-            "datapath": hparams["data_folder"],
-            "savepath": hparams["save_folder"],
-            "n_spks": hparams["num_spks"],
-            "skip_prep": hparams["skip_prep"],
-            "fs": hparams["sample_rate"],
-        },
-    )
+        run_on_main(
+            prepare_lrs2,
+            kwargs={
+                "datapath": hparams["data_folder"],
+                "savepath": hparams["save_folder"],
+                "n_spks": hparams["num_spks"],
+                "skip_prep": hparams["skip_prep"],
+                "fs": hparams["sample_rate"],
+                "source_sample_rate": hparams["lrs2_source_sample_rate"],
+                "version": hparams["lrs2_version"],
+            },
+        )
+    else:
+        from utils.prepare_data import prepare_wsjmix  # noqa
+
+        run_on_main(
+            prepare_wsjmix,
+            kwargs={
+                "datapath": hparams["data_folder"],
+                "savepath": hparams["save_folder"],
+                "n_spks": hparams["num_spks"],
+                "skip_prep": hparams["skip_prep"],
+                "fs": hparams["sample_rate"],
+            },
+        )
 
     # Create dataset objects
     if hparams["dynamic_mixing"]:
@@ -800,6 +828,9 @@ if __name__ == "__main__":
         _, valid_data, test_data = dataio_prep(hparams)
     else:
         train_data, valid_data, test_data = dataio_prep(hparams)
+
+    if hparams.get("dataset") == "lrs2":
+        hparams["n_train_examples"] = len(train_data)
 
     # Initialize wandb
 
